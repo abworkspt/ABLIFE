@@ -141,7 +141,7 @@ function setupIPC() {
 
   ipcMain.handle('sync-bank', async () => {
     try {
-      const { count, transactions } = await startSync(shell)
+      const { count, transactions, balance } = await startSync(shell)
       if (!db) return { ok: false, error: 'Base de dados não disponível' }
       let imported = 0
       for (const tx of transactions) {
@@ -153,6 +153,15 @@ function setupIPC() {
           db.run('INSERT INTO transactions (name,amount,category,date,type,icon) VALUES (?,?,?,?,?,?)',
             [tx.name, tx.amount, tx.category, tx.date, tx.type, tx.icon])
           imported++
+        }
+      }
+      if (balance !== null) {
+        const hasAccount = db.exec('SELECT id FROM accounts LIMIT 1')
+        if (hasAccount[0]) {
+          db.run('UPDATE accounts SET balance=?, last_sync=?', [balance, new Date().toISOString()])
+        } else {
+          db.run('INSERT INTO accounts (name,balance,bank,last_sync) VALUES (?,?,?,?)',
+            ['Conta Principal', balance, 'BBVA', new Date().toISOString()])
         }
       }
       saveDb()

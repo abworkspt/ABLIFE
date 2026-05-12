@@ -105,7 +105,9 @@ function waitForCallback() {
 }
 
 function mapTransaction(tx) {
-  const amount = parseFloat(tx.transaction_amount?.amount ?? 0)
+  let amount = parseFloat(tx.transaction_amount?.amount ?? 0)
+  const isDebit = tx.credit_debit_indicator === 'DBIT'
+  if (isDebit && amount > 0) amount = -amount
   const desc =
     tx.creditor_name ||
     tx.debtor_name ||
@@ -169,14 +171,26 @@ async function startSync(shell) {
     fs.writeFileSync(path.join(__dirname, '.bbva-connected'), '')
   }
 
-  // Ir buscar transações de cada conta
+  // Ir buscar saldo e transações de cada conta
   const transactions = []
   const dateFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+  let balance = null
 
   for (const accountId of session.accounts) {
+    // Saldo real
+    const balResp = await apiCall('GET', `/accounts/${accountId}/balances`)
+    if (balResp.status === 200) {
+      const balances = balResp.data?.balances || []
+      const b = balances.find(b => b.balance_type === 'closingBooked') || balances[0]
+      if (b) balance = parseFloat(b.balance_amount?.amount ?? 0)
+    }
+
+    // Transações
     const txResp = await apiCall('GET', `/accounts/${accountId}/transactions?date_from=${dateFrom}`)
+    if (txResp.status === 429) {
+      throw new Error('O BBVA atingiu o limite diário de acessos via API (máx. 4/dia). Tenta amanhã.')
+    }
     if (txResp.status === 401 || txResp.status === 403) {
-      // Sessão expirou — limpar e pedir para sincronizar de novo
       fs.unlinkSync(SESSION_PATH)
       throw new Error('Sessão expirada. Clica em sincronizar de novo para autenticar.')
     }
@@ -184,7 +198,7 @@ async function startSync(shell) {
     transactions.push(...txs.map(mapTransaction))
   }
 
-  return { count: transactions.length, transactions }
+  return { count: transactions.length, transactions, balance }
 }
 
 async function autoSync(db, saveDb) {
