@@ -178,14 +178,11 @@ function createWindow() {
   win.once('ready-to-show', () => win.show())
 }
 
-app.whenReady().then(async () => {
-  // Registar protocolo ablife:// para capturar redirect OAuth do BBVA
-  if (process.platform === 'win32') {
-    app.setAsDefaultProtocolClient('ablife', process.execPath, [app.getAppPath()])
-  } else {
-    app.setAsDefaultProtocolClient('ablife')
-  }
+// Necessário para capturar ablife:// numa instância já aberta no Windows
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) { app.quit() }
 
+app.whenReady().then(async () => {
   await setupDatabase(app.getPath('userData'))
   setupIPC()
   createWindow()
@@ -198,22 +195,3 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// Windows: captura o URL ablife:// quando a app é aberta pelo protocolo
-app.on('second-instance', (_, argv) => {
-  const url = argv.find(a => a.startsWith('ablife://'))
-  if (url) handleProtocolUrl(url)
-})
-
-// macOS
-app.on('open-url', (event, url) => {
-  event.preventDefault()
-  handleProtocolUrl(url)
-})
-
-function handleProtocolUrl(url) {
-  try {
-    const parsed = new URL(url)
-    const params = Object.fromEntries(parsed.searchParams)
-    global.pendingOAuthCallback?.(params)
-  } catch {}
-}

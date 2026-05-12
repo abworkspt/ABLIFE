@@ -1,9 +1,10 @@
 const https = require('https')
+const http = require('http')
 const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 
-const APP_ID = '7f5e0470-c182-40d7-b068-d009747480d5'
+const APP_ID = 'fe028778-fad0-4980-9e39-586d49fcbce6'
 const REDIRECT_URL = 'https://abworkspt.github.io/ABLIFE/callback'
 const KEY_PATH = path.join(__dirname, 'bbva-key.pem')
 
@@ -53,16 +54,26 @@ function apiCall(method, endpoint, body) {
 
 function waitForCallback() {
   return new Promise((resolve, reject) => {
+    let server
     const timeout = setTimeout(() => {
-      global.pendingOAuthCallback = null
+      server?.close()
       reject(new Error('Timeout: autenticação não concluída em 5 minutos'))
     }, 5 * 60 * 1000)
 
-    global.pendingOAuthCallback = (params) => {
+    server = http.createServer((req, res) => {
       clearTimeout(timeout)
-      global.pendingOAuthCallback = null
-      resolve(params)
-    }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(`<!DOCTYPE html><html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#0e0f11;color:#fff">
+        <h2 style="color:#16a97d">✅ Podes fechar esta janela!</h2>
+        <p style="color:#6b7280">A importar transações no ABLIFE...</p>
+      </body></html>`)
+      server.close()
+      const url = new URL(req.url, 'http://localhost:7890')
+      resolve(Object.fromEntries(url.searchParams))
+    })
+
+    server.on('error', err => { clearTimeout(timeout); reject(err) })
+    server.listen(7890)
   })
 }
 
