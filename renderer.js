@@ -155,11 +155,14 @@ function setView(view) {
   currentView = view
   document.getElementById('view-dashboard').style.display = view === 'dashboard' ? 'flex' : 'none'
   document.getElementById('view-transactions').style.display = view === 'transactions' ? 'flex' : 'none'
-  document.getElementById('page-title').textContent = view === 'dashboard' ? 'Dashboard' : 'Transações'
+  document.getElementById('view-tarefas').style.display = view === 'tarefas' ? 'flex' : 'none'
+  const titles = { dashboard: 'Dashboard', transactions: 'Transações', tarefas: 'Tarefas' }
+  document.getElementById('page-title').textContent = titles[view] || view
   document.querySelectorAll('.sb-item[data-view]').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view)
   })
   if (view === 'transactions') renderAllTxs()
+  if (view === 'tarefas') renderGroups()
 }
 
 // ── Event listeners ──
@@ -178,6 +181,8 @@ document.getElementById('next-month').addEventListener('click', () => {
 document.querySelectorAll('.sb-item[data-view]').forEach(el => {
   el.addEventListener('click', () => setView(el.dataset.view))
 })
+
+document.querySelector('.sb-item[data-module="tarefas"]')?.addEventListener('click', () => setView('tarefas'))
 
 document.querySelectorAll('.tx-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -250,6 +255,108 @@ if (syncBtn && window.db?.syncBank) {
     }
   })
 }
+
+// ── Módulo de Tarefas ──
+let activeGroupId = null
+let activeGroupColor = '#8b5cf6'
+let selectedColor = '#8b5cf6'
+
+const groupModal = document.getElementById('group-modal-overlay')
+
+document.getElementById('add-group-btn').addEventListener('click', () => {
+  document.getElementById('g-name').value = ''
+  groupModal.style.display = 'flex'
+  document.getElementById('g-name').focus()
+})
+document.getElementById('group-modal-close').addEventListener('click', () => groupModal.style.display = 'none')
+groupModal.addEventListener('click', e => { if (e.target === groupModal) groupModal.style.display = 'none' })
+
+document.querySelectorAll('.color-opt').forEach(opt => {
+  opt.addEventListener('click', () => {
+    document.querySelectorAll('.color-opt').forEach(o => o.classList.remove('selected'))
+    opt.classList.add('selected')
+    selectedColor = opt.dataset.color
+  })
+})
+
+document.getElementById('save-group-btn').addEventListener('click', async () => {
+  const name = document.getElementById('g-name').value.trim()
+  if (!name) return
+  const result = await window.db.addGroup(name, selectedColor)
+  groupModal.style.display = 'none'
+  await renderGroups()
+  if (result.id) selectGroup(result.id, name, selectedColor)
+})
+
+async function renderGroups() {
+  const groups = await window.db.getGroups()
+  const list = document.getElementById('groups-list')
+  list.innerHTML = groups.map(g => `
+    <div class="group-item${g.id === activeGroupId ? ' active' : ''}" data-id="${g.id}" data-name="${g.name}" data-color="${g.color}">
+      <div class="group-dot" style="background:${g.color}"></div>
+      <span>${g.name}</span>
+    </div>
+  `).join('')
+  list.querySelectorAll('.group-item').forEach(el => {
+    el.addEventListener('click', () => selectGroup(Number(el.dataset.id), el.dataset.name, el.dataset.color))
+  })
+}
+
+async function selectGroup(id, name, color) {
+  activeGroupId = id
+  activeGroupColor = color
+  document.getElementById('tasks-empty-state').style.display = 'none'
+  const panel = document.getElementById('tasks-panel')
+  panel.style.display = 'flex'
+  document.getElementById('tasks-group-name').textContent = name
+  document.getElementById('tasks-group-name').style.color = color
+  document.querySelectorAll('.group-item').forEach(el => el.classList.toggle('active', Number(el.dataset.id) === id))
+  await renderTasks()
+}
+
+async function renderTasks() {
+  if (!activeGroupId) return
+  const tasks = await window.db.getTasks(activeGroupId)
+  document.getElementById('task-list').innerHTML = tasks.map(t => `
+    <div class="task-item${t.done ? ' done' : ''}" data-id="${t.id}">
+      <div class="task-check${t.done ? ' checked' : ''}" style="color:${activeGroupColor}" data-id="${t.id}" data-done="${t.done}"></div>
+      <span class="task-title">${t.title}</span>
+      <button class="task-del" data-id="${t.id}">✕</button>
+    </div>
+  `).join('')
+
+  document.querySelectorAll('.task-check').forEach(el => {
+    el.addEventListener('click', async () => {
+      await window.db.toggleTask(Number(el.dataset.id), !Number(el.dataset.done))
+      await renderTasks()
+    })
+  })
+  document.querySelectorAll('.task-del').forEach(el => {
+    el.addEventListener('click', async () => {
+      await window.db.deleteTask(Number(el.dataset.id))
+      await renderTasks()
+    })
+  })
+}
+
+document.getElementById('new-task-input').addEventListener('keydown', async e => {
+  if (e.key !== 'Enter') return
+  const title = e.target.value.trim()
+  if (!title || !activeGroupId) return
+  await window.db.addTask(activeGroupId, title)
+  e.target.value = ''
+  await renderTasks()
+})
+
+document.getElementById('del-group-btn').addEventListener('click', async () => {
+  if (!activeGroupId) return
+  if (!confirm('Apagar grupo e todas as suas tarefas?')) return
+  await window.db.deleteGroup(activeGroupId)
+  activeGroupId = null
+  document.getElementById('tasks-panel').style.display = 'none'
+  document.getElementById('tasks-empty-state').style.display = 'flex'
+  await renderGroups()
+})
 
 // Auto-sync em segundo plano
 window.db?.onAutoSynced?.((result) => {

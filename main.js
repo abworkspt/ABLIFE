@@ -41,6 +41,18 @@ async function setupDatabase(userDataPath) {
         bank TEXT,
         last_sync TEXT
       );
+      CREATE TABLE IF NOT EXISTS task_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        color TEXT DEFAULT '#6b7280'
+      );
+      CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        done INTEGER DEFAULT 0,
+        created_at TEXT
+      );
     `)
 
     const count = db.exec('SELECT COUNT(*) FROM transactions')[0]
@@ -137,6 +149,49 @@ function setupIPC() {
     db.run('DELETE FROM transactions WHERE id=?', [id])
     saveDb()
     return { ok:true }
+  })
+
+  // Grupos
+  ipcMain.handle('get-groups', () => {
+    if (!db) return []
+    return rowsToObjects(db.exec('SELECT id, name, color FROM task_groups ORDER BY id'))
+  })
+  ipcMain.handle('add-group', (_, name, color) => {
+    if (!db) return { ok: false }
+    db.run('INSERT INTO task_groups (name, color) VALUES (?, ?)', [name, color])
+    saveDb()
+    return { ok: true, id: db.exec('SELECT last_insert_rowid()')[0].values[0][0] }
+  })
+  ipcMain.handle('delete-group', (_, id) => {
+    if (!db) return { ok: false }
+    db.run('DELETE FROM tasks WHERE group_id=?', [id])
+    db.run('DELETE FROM task_groups WHERE id=?', [id])
+    saveDb()
+    return { ok: true }
+  })
+
+  // Tarefas
+  ipcMain.handle('get-tasks', (_, groupId) => {
+    if (!db) return []
+    return rowsToObjects(db.exec('SELECT id, title, done FROM tasks WHERE group_id=? ORDER BY done, id', [groupId]))
+  })
+  ipcMain.handle('add-task', (_, groupId, title) => {
+    if (!db) return { ok: false }
+    db.run('INSERT INTO tasks (group_id, title, done, created_at) VALUES (?, ?, 0, ?)', [groupId, title, new Date().toISOString()])
+    saveDb()
+    return { ok: true }
+  })
+  ipcMain.handle('toggle-task', (_, id, done) => {
+    if (!db) return { ok: false }
+    db.run('UPDATE tasks SET done=? WHERE id=?', [done ? 1 : 0, id])
+    saveDb()
+    return { ok: true }
+  })
+  ipcMain.handle('delete-task', (_, id) => {
+    if (!db) return { ok: false }
+    db.run('DELETE FROM tasks WHERE id=?', [id])
+    saveDb()
+    return { ok: true }
   })
 
   ipcMain.handle('sync-bank', async () => {
