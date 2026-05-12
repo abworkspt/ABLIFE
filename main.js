@@ -1,4 +1,6 @@
-const { app, BrowserWindow, ipcMain } = require('electron')
+const { app, BrowserWindow, ipcMain, shell } = require('electron')
+if (!app.isPackaged) require('electron-reload')(__dirname, { electron: process.execPath })
+const { startSync } = require('./bbva')
 const path = require('path')
 const fs = require('fs')
 
@@ -135,6 +137,29 @@ function setupIPC() {
     saveDb()
     return { ok:true }
   })
+
+  ipcMain.handle('sync-bank', async () => {
+    try {
+      const { count, transactions } = await startSync(shell)
+      if (!db) return { ok: false, error: 'Base de dados não disponível' }
+      let imported = 0
+      for (const tx of transactions) {
+        const exists = db.exec(
+          'SELECT id FROM transactions WHERE name=? AND date=? AND amount=?',
+          [tx.name, tx.date, tx.amount]
+        )
+        if (!exists[0]) {
+          db.run('INSERT INTO transactions (name,amount,category,date,type,icon) VALUES (?,?,?,?,?,?)',
+            [tx.name, tx.amount, tx.category, tx.date, tx.type, tx.icon])
+          imported++
+        }
+      }
+      saveDb()
+      return { ok: true, total: count, imported }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  })
 }
 
 function createWindow() {
@@ -154,6 +179,13 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // Registar protocolo ablife:// para capturar redirect OAuth do BBVA
+  if (process.platform === 'win32') {
+    app.setAsDefaultProtocolClient('ablife', process.execPath, [app.getAppPath()])
+  } else {
+    app.setAsDefaultProtocolClient('ablife')
+  }
+
   await setupDatabase(app.getPath('userData'))
   setupIPC()
   createWindow()
@@ -165,3 +197,23 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+// Windows: captura o URL ablife:// quando a app é aberta pelo protocolo
+app.on('second-instance', (_, argv) => {
+  const url = argv.find(a => a.startsWith('ablife://'))
+  if (url) handleProtocolUrl(url)
+})
+
+// macOS
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  handleProtocolUrl(url)
+})
+
+function handleProtocolUrl(url) {
+  try {
+    const parsed = new URL(url)
+    const params = Object.fromEntries(parsed.searchParams)
+    global.pendingOAuthCallback?.(params)
+  } catch {}
+}

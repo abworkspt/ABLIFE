@@ -5,4 +5,5 @@ contextBridge.exposeInMainWorld('db', {
   getSummary: (month, year) => ipcRenderer.invoke('get-summary', month, year),
   addTransaction: (tx) => ipcRenderer.invoke('add-transaction', tx),
   deleteTransaction: (id) => ipcRenderer.invoke('delete-transaction', id),
+  syncBank: () => ipcRenderer.invoke('sync-bank'),
 })

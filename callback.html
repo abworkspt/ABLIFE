@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<title>ABLIFE — A autenticar...</title>
+<style>
+  body { font-family: sans-serif; background: #0e0f11; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; flex-direction: column; gap: 16px; }
+  h2 { color: #16a97d; margin: 0; }
+  p { color: #6b7280; margin: 0; }
+</style>
+</head>
+<body>
+<h2>✅ Autenticação concluída!</h2>
+<p>A redirecionar para o ABLIFE...</p>
+<script>
+  const params = window.location.search;
+  window.location.href = 'ablife://callback' + params;
+</script>
+</body>
+</html>
