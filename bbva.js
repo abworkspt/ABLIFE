@@ -166,6 +166,7 @@ async function startSync(shell) {
       valid_until: validUntil
     }
     saveSession(session)
+    fs.writeFileSync(path.join(__dirname, '.bbva-connected'), '')
   }
 
   // Ir buscar transações de cada conta
@@ -186,4 +187,43 @@ async function startSync(shell) {
   return { count: transactions.length, transactions }
 }
 
-module.exports = { startSync }
+async function autoSync(db, saveDb) {
+  const session = loadSession()
+  if (!session || !session.accounts?.length) return { imported: 0 }
+
+  const lastSync = session.lastSync ? new Date(session.lastSync) : null
+  const hoursSinceLast = lastSync ? (Date.now() - lastSync) / 3600000 : Infinity
+  if (hoursSinceLast < 23) return { imported: 0, skipped: true }
+
+  const dateFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+  const transactions = []
+
+  for (const accountId of session.accounts) {
+    const txResp = await apiCall('GET', `/accounts/${accountId}/transactions?date_from=${dateFrom}`)
+    if (txResp.status === 401 || txResp.status === 403) {
+      fs.unlinkSync(SESSION_PATH)
+      return { imported: 0, error: 'Sessão expirada' }
+    }
+    const txs = txResp.data?.transactions || []
+    transactions.push(...txs.map(mapTransaction))
+  }
+
+  let imported = 0
+  for (const tx of transactions) {
+    const exists = db.exec('SELECT id FROM transactions WHERE name=? AND date=? AND amount=?', [tx.name, tx.date, tx.amount])
+    if (!exists[0]) {
+      db.run('INSERT INTO transactions (name,amount,category,date,type,icon) VALUES (?,?,?,?,?,?)',
+        [tx.name, tx.amount, tx.category, tx.date, tx.type, tx.icon])
+      imported++
+    }
+  }
+
+  if (imported > 0) saveDb()
+
+  session.lastSync = new Date().toISOString()
+  saveSession(session)
+
+  return { imported }
+}
+
+module.exports = { startSync, autoSync }

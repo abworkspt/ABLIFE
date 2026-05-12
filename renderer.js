@@ -251,5 +251,15 @@ if (syncBtn && window.db?.syncBank) {
   })
 }
 
+// Auto-sync em segundo plano
+window.db?.onAutoSynced?.((result) => {
+  if (result.imported > 0) {
+    bankName.textContent = 'BBVA · sincronizado'
+    syncStatus.style.display = 'block'
+    syncStatus.textContent = `✅ ${result.imported} novas transações (auto-sync)`
+    renderAll()
+  }
+})
+
 // Init
 renderAll()

@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
 if (!app.isPackaged) require('electron-reload')(__dirname, { electron: process.execPath })
-const { startSync } = require('./bbva')
+const { startSync, autoSync } = require('./bbva')
 const path = require('path')
 const fs = require('fs')
 
@@ -44,7 +44,8 @@ async function setupDatabase(userDataPath) {
     `)
 
     const count = db.exec('SELECT COUNT(*) FROM transactions')[0]
-    if (!count || count.values[0][0] === 0) seedDemoData()
+    const bbvaConnected = fs.existsSync(path.join(__dirname, '.bbva-connected'))
+    if (!bbvaConnected && (!count || count.values[0][0] === 0)) seedDemoData()
 
     global.saveDb = () => {
       const data = db.export()
@@ -178,10 +179,24 @@ function createWindow() {
   win.once('ready-to-show', () => win.show())
 }
 
+async function runAutoSync() {
+  if (!db) return
+  try {
+    const result = await autoSync(db, saveDb)
+    if (result.imported > 0) {
+      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('auto-synced', result))
+    }
+  } catch {}
+}
+
 app.whenReady().then(async () => {
   await setupDatabase(app.getPath('userData'))
   setupIPC()
   createWindow()
+
+  // Auto-sync no arranque e a cada hora
+  setTimeout(runAutoSync, 3000)
+  setInterval(runAutoSync, 60 * 60 * 1000)
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

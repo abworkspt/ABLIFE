@@ -3,3 +3,4 @@ dist/
 *.db
 *.pem
 bbva-session.json
+.bbva-connected
