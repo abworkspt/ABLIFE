@@ -222,5 +222,34 @@ document.getElementById('save-tx-btn').addEventListener('click', async () => {
   await renderAll()
 })
 
+// Sync BBVA
+const syncBtn = document.getElementById('sync-btn')
+const syncStatus = document.getElementById('sync-status')
+const bankName = document.getElementById('bank-name')
+
+if (syncBtn && window.db?.syncBank) {
+  syncBtn.addEventListener('click', async () => {
+    syncBtn.style.opacity = '0.5'
+    syncBtn.style.pointerEvents = 'none'
+    bankName.textContent = 'A sincronizar...'
+    syncStatus.style.display = 'block'
+    syncStatus.textContent = 'A abrir autenticação BBVA no browser...'
+
+    const result = await window.db.syncBank()
+
+    syncBtn.style.opacity = ''
+    syncBtn.style.pointerEvents = ''
+
+    if (result.ok) {
+      bankName.textContent = 'BBVA · sincronizado'
+      syncStatus.textContent = `✅ ${result.imported} novas transações importadas (${result.total} no banco)`
+      await renderAll()
+    } else {
+      bankName.textContent = 'BBVA · erro'
+      syncStatus.textContent = `❌ ${result.error}`
+    }
+  })
+}
+
 // Init
 renderAll()

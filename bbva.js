@@ -7,8 +7,23 @@ const path = require('path')
 const APP_ID = 'fe028778-fad0-4980-9e39-586d49fcbce6'
 const REDIRECT_URL = 'https://abworkspt.github.io/ABLIFE/callback'
 const KEY_PATH = path.join(__dirname, 'bbva-key.pem')
+const SESSION_PATH = path.join(__dirname, 'bbva-session.json')
 
 const API_HOST = 'api.enablebanking.com'
+
+function loadSession() {
+  try {
+    if (fs.existsSync(SESSION_PATH)) {
+      const s = JSON.parse(fs.readFileSync(SESSION_PATH, 'utf8'))
+      if (new Date(s.valid_until) > new Date()) return s
+    }
+  } catch {}
+  return null
+}
+
+function saveSession(session) {
+  fs.writeFileSync(SESSION_PATH, JSON.stringify(session), 'utf8')
+}
 
 function toBase64url(buf) {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
@@ -30,7 +45,7 @@ function apiCall(method, endpoint, body) {
     const bodyStr = body ? JSON.stringify(body) : null
     const options = {
       hostname: API_HOST,
-      path: endpoint,
+      path: endpoint.split('?')[0].split('/').map(s => encodeURIComponent(s)).join('/') + (endpoint.includes('?') ? '?' + endpoint.split('?')[1] : ''),
       method,
       headers: {
         'Authorization': `Bearer ${createJWT()}`,
@@ -52,28 +67,40 @@ function apiCall(method, endpoint, body) {
   })
 }
 
+let callbackServer = null
+
 function waitForCallback() {
   return new Promise((resolve, reject) => {
-    let server
+    if (callbackServer) {
+      try { callbackServer.close() } catch {}
+      callbackServer = null
+    }
+
     const timeout = setTimeout(() => {
-      server?.close()
+      callbackServer?.close()
+      callbackServer = null
       reject(new Error('Timeout: autenticação não concluída em 5 minutos'))
     }, 5 * 60 * 1000)
 
-    server = http.createServer((req, res) => {
-      clearTimeout(timeout)
+    let handled = false
+    const server = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(`<!DOCTYPE html><html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#0e0f11;color:#fff">
         <h2 style="color:#16a97d">✅ Podes fechar esta janela!</h2>
         <p style="color:#6b7280">A importar transações no ABLIFE...</p>
       </body></html>`)
-      server.close()
+      if (handled) return
+      handled = true
+      clearTimeout(timeout)
+      callbackServer = null
+      setImmediate(() => server.close())
       const url = new URL(req.url, 'http://localhost:7890')
       resolve(Object.fromEntries(url.searchParams))
     })
+    callbackServer = server
 
-    server.on('error', err => { clearTimeout(timeout); reject(err) })
-    server.listen(7890)
+    callbackServer.on('error', err => { clearTimeout(timeout); reject(err) })
+    callbackServer.listen(7890)
   })
 }
 
@@ -95,48 +122,63 @@ function mapTransaction(tx) {
 }
 
 async function startSync(shell) {
-  const state = crypto.randomBytes(16).toString('hex')
-  const validUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+  let session = loadSession()
 
-  // 1. Criar URL de autenticação BBVA
-  const authResp = await apiCall('POST', '/auth', {
-    access: { valid_until: validUntil },
-    aspsp: { name: 'BBVA', country: 'PT' },
-    state,
-    redirect_url: REDIRECT_URL,
-    psu_type: 'personal'
-  })
+  if (!session) {
+    // Sem sessão guardada — autenticar no BBVA
+    const validUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
+    const state = crypto.randomBytes(16).toString('hex')
 
-  if (authResp.status !== 200 && authResp.status !== 201) {
-    throw new Error(`Erro Enable Banking (${authResp.status}): ${JSON.stringify(authResp.data)}`)
+    const authResp = await apiCall('POST', '/auth', {
+      access: { valid_until: validUntil },
+      aspsp: { name: 'BBVA', country: 'PT' },
+      state,
+      redirect_url: REDIRECT_URL,
+      psu_type: 'personal'
+    })
+
+    if (authResp.status !== 200 && authResp.status !== 201) {
+      throw new Error(`Erro Enable Banking (${authResp.status}): ${JSON.stringify(authResp.data)}`)
+    }
+
+    const { url } = authResp.data
+    if (!url) throw new Error('Enable Banking não devolveu URL de autenticação')
+
+    await shell.openExternal(url)
+
+    const params = await waitForCallback()
+    if (params.error) throw new Error(`Erro na autenticação: ${params.error_description || params.error}`)
+    if (!params.code) throw new Error('Sem código de autorização no callback')
+
+    const sessionResp = await apiCall('POST', '/sessions', { code: params.code })
+    if (sessionResp.status !== 200 && sessionResp.status !== 201) {
+      throw new Error(`Erro ao criar sessão (${sessionResp.status}): ${JSON.stringify(sessionResp.data)}`)
+    }
+
+    const TARGET_IBAN = 'PT50001900040020006799985'
+    const allAccounts = sessionResp.data.accounts || []
+    const filtered = allAccounts.filter(a => a.account_id?.iban === TARGET_IBAN)
+    const accountUids = (filtered.length ? filtered : allAccounts).map(a => a.uid)
+
+    session = {
+      session_id: sessionResp.data.session_id,
+      accounts: accountUids,
+      valid_until: validUntil
+    }
+    saveSession(session)
   }
 
-  const { url } = authResp.data
-  if (!url) throw new Error('Enable Banking não devolveu URL de autenticação')
-
-  // 2. Abrir browser para o utilizador autenticar no BBVA
-  await shell.openExternal(url)
-
-  // 3. Aguardar o redirect com o código
-  const params = await waitForCallback()
-  if (params.error) throw new Error(`Erro na autenticação: ${params.error_description || params.error}`)
-  if (!params.code) throw new Error('Sem código de autorização no callback')
-
-  // 4. Trocar código por sessão
-  const sessionResp = await apiCall('POST', '/sessions', { code: params.code })
-  if (sessionResp.status !== 200 && sessionResp.status !== 201) {
-    throw new Error(`Erro ao criar sessão (${sessionResp.status}): ${JSON.stringify(sessionResp.data)}`)
-  }
-
-  const session_id = sessionResp.data.session_id
-  const accountIds = sessionResp.data.accounts || []
-
-  // 5. Ir buscar transações de cada conta
+  // Ir buscar transações de cada conta
   const transactions = []
   const dateFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
 
-  for (const accountId of accountIds) {
+  for (const accountId of session.accounts) {
     const txResp = await apiCall('GET', `/accounts/${accountId}/transactions?date_from=${dateFrom}`)
+    if (txResp.status === 401 || txResp.status === 403) {
+      // Sessão expirou — limpar e pedir para sincronizar de novo
+      fs.unlinkSync(SESSION_PATH)
+      throw new Error('Sessão expirada. Clica em sincronizar de novo para autenticar.')
+    }
     const txs = txResp.data?.transactions || []
     transactions.push(...txs.map(mapTransaction))
   }

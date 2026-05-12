@@ -178,10 +178,6 @@ function createWindow() {
   win.once('ready-to-show', () => win.show())
 }
 
-// Necessário para capturar ablife:// numa instância já aberta no Windows
-const gotLock = app.requestSingleInstanceLock()
-if (!gotLock) { app.quit() }
-
 app.whenReady().then(async () => {
   await setupDatabase(app.getPath('userData'))
   setupIPC()
